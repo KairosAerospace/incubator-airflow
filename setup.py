@@ -242,7 +242,7 @@ else:
 def do_setup():
     write_version()
     setup(
-        name='apache-airflow',
+        name='kairflow',
         description='Programmatically author, schedule and monitor data pipelines',
         license='Apache License 2.0',
         version=version,
