@@ -27,6 +27,6 @@ workflows:
   version: 2
   kairflow-workflow:
     jobs:
-      - build:
+      - artifactorize:
           context: org-global
 
