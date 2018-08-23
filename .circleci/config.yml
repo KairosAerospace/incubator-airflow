@@ -6,6 +6,12 @@ jobs:
     working_directory: /opt/kairos/build-home/repo
     steps:
       - checkout
+      - run: kairos_container_init
+      - run: kairos_python_build
+      - run: kairos_python_package
+      - run: kairos_python_deploy
+      - run: kairos_lambda_publish
+      - run: kairos_python_cleanup
       - store_artifacts:
           path: dist
           destination: build-artifacts
@@ -18,3 +24,4 @@ workflows:
     jobs:
       - build:
           context: org-global
+
