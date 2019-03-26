@@ -17,21 +17,22 @@
 # specific language governing permissions and limitations
 # under the License.
 
-from builtins import str
-import dill
 import inspect
 import os
 import pickle
 import subprocess
 import sys
 import types
+from textwrap import dedent
+
+import dill
+from builtins import str
 
 from airflow.exceptions import AirflowException
 from airflow.models import BaseOperator, SkipMixin
 from airflow.utils.decorators import apply_defaults
 from airflow.utils.file import TemporaryDirectory
-
-from textwrap import dedent
+from airflow.utils.operator_helpers import context_to_airflow_vars
 
 
 class PythonOperator(BaseOperator):
@@ -91,6 +92,13 @@ class PythonOperator(BaseOperator):
             self.template_ext = templates_exts
 
     def execute(self, context):
+        # Export context to make it available for callables to use.
+        airflow_context_vars = context_to_airflow_vars(context, in_env_var_format=True)
+        self.log.info("Exporting the following env vars:\n%s",
+                      '\n'.join(["{}={}".format(k, v)
+                                 for k, v in airflow_context_vars.items()]))
+        os.environ.update(airflow_context_vars)
+
         if self.provide_context:
             context.update(self.op_kwargs)
             context['templates_dict'] = self.templates_dict
@@ -106,14 +114,14 @@ class PythonOperator(BaseOperator):
 
 class BranchPythonOperator(PythonOperator, SkipMixin):
     """
-    Allows a workflow to "branch" or follow a single path following the
-    execution of this task.
+    Allows a workflow to "branch" or follow a path following the execution
+    of this task.
 
     It derives the PythonOperator and expects a Python function that returns
-    the task_id to follow. The task_id returned should point to a task
-    directly downstream from {self}. All other "branches" or
-    directly downstream tasks are marked with a state of ``skipped`` so that
-    these paths can't move forward. The ``skipped`` states are propageted
+    a single task_id or list of task_ids to follow. The task_id(s) returned
+    should point to a task directly downstream from {self}. All other "branches"
+    or directly downstream tasks are marked with a state of ``skipped`` so that
+    these paths can't move forward. The ``skipped`` states are propagated
     downstream to allow for the DAG state to fill up and the DAG run's state
     to be inferred.
 
@@ -125,13 +133,15 @@ class BranchPythonOperator(PythonOperator, SkipMixin):
     """
     def execute(self, context):
         branch = super(BranchPythonOperator, self).execute(context)
+        if isinstance(branch, str):
+            branch = [branch]
         self.log.info("Following branch %s", branch)
         self.log.info("Marking other directly downstream tasks as skipped")
 
         downstream_tasks = context['task'].downstream_list
         self.log.debug("Downstream task_ids %s", downstream_tasks)
 
-        skip_tasks = [t for t in downstream_tasks if t.task_id != branch]
+        skip_tasks = [t for t in downstream_tasks if t.task_id not in branch]
         if downstream_tasks:
             self.skip(context['dag_run'], context['ti'].execution_date, skip_tasks)
 
@@ -180,10 +190,8 @@ class PythonVirtualenvOperator(PythonOperator):
     variable named virtualenv_string_args will be available (populated by
     string_args). In addition, one can pass stuff through op_args and op_kwargs, and one
     can use a return value.
-
     Note that if your virtualenv runs in a different Python major version than Airflow,
     you cannot use return values, op_args, or op_kwargs. You can use string_args though.
-
     :param python_callable: A python function with no references to outside variables,
         defined with def, which will be run in a virtualenv
     :type python_callable: function
@@ -204,6 +212,12 @@ class PythonVirtualenvOperator(PythonOperator):
     :type op_kwargs: list
     :param op_kwargs: A dict of keyword arguments to pass to python_callable.
     :type op_kwargs: dict
+    :param provide_context: if set to true, Airflow will pass a set of
+        keyword arguments that can be used in your function. This set of
+        kwargs correspond exactly to what you can use in your jinja
+        templates. For this to work, you need to define `**kwargs` in your
+        function header.
+    :type provide_context: bool
     :param string_args: Strings that are present in the global var virtualenv_string_args,
         available to python_callable at runtime as a list(str). Note that args are split
         by newline.
@@ -217,19 +231,21 @@ class PythonVirtualenvOperator(PythonOperator):
         processing templated fields, for examples ``['.sql', '.hql']``
     :type templates_exts: list(str)
     """
+    @apply_defaults
     def __init__(self, python_callable,
                  requirements=None,
                  python_version=None, use_dill=False,
                  system_site_packages=True,
-                 op_args=None, op_kwargs=None, string_args=None,
-                 templates_dict=None, templates_exts=None, *args, **kwargs):
+                 op_args=None, op_kwargs=None, provide_context=False,
+                 string_args=None, templates_dict=None, templates_exts=None,
+                 *args, **kwargs):
         super(PythonVirtualenvOperator, self).__init__(
             python_callable=python_callable,
             op_args=op_args,
             op_kwargs=op_kwargs,
             templates_dict=templates_dict,
             templates_exts=templates_exts,
-            provide_context=False,
+            provide_context=provide_context,
             *args,
             **kwargs)
         self.requirements = requirements or []
@@ -293,14 +309,14 @@ class PythonVirtualenvOperator(PythonOperator):
 
     def _execute_in_subprocess(self, cmd):
         try:
-            self.log.info("Executing cmd\n{}".format(cmd))
+            self.log.info("Executing cmd\n%s", cmd)
             output = subprocess.check_output(cmd,
                                              stderr=subprocess.STDOUT,
                                              close_fds=True)
             if output:
-                self.log.info("Got output\n{}".format(output))
+                self.log.info("Got output\n%s", output)
         except subprocess.CalledProcessError as e:
-            self.log.info("Got error output\n{}".format(e.output))
+            self.log.info("Got error output\n%s", e.output)
             raise
 
     def _write_string_args(self, filename):
@@ -355,7 +371,8 @@ class PythonVirtualenvOperator(PythonOperator):
             cmd = ['{}/bin/pip'.format(tmp_dir), 'install']
             return cmd + self.requirements
 
-    def _generate_python_cmd(self, tmp_dir, script_filename,
+    @staticmethod
+    def _generate_python_cmd(tmp_dir, script_filename,
                              input_filename, output_filename, string_args_filename):
         # direct path alleviates need to activate
         return ['{}/bin/python'.format(tmp_dir), script_filename,

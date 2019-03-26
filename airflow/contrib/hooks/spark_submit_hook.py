@@ -26,7 +26,6 @@ from airflow.hooks.base_hook import BaseHook
 from airflow.exceptions import AirflowException
 from airflow.utils.log.logging_mixin import LoggingMixin
 from airflow.contrib.kubernetes import kube_client
-from kubernetes.client.rest import ApiException
 
 
 class SparkSubmitHook(BaseHook, LoggingMixin):
@@ -45,6 +44,8 @@ class SparkSubmitHook(BaseHook, LoggingMixin):
     :type files: str
     :param py_files: Additional python files used by the job, can be .zip, .egg or .py.
     :type py_files: str
+    :param: archives: Archives that spark should unzip (and possibly tag with #ALIAS) into
+        the application working directory.
     :param driver_classpath: Additional, driver-specific, classpath settings.
     :type driver_classpath: str
     :param jars: Submit additional jars to upload and place them in executor classpath.
@@ -91,6 +92,7 @@ class SparkSubmitHook(BaseHook, LoggingMixin):
                  conn_id='spark_default',
                  files=None,
                  py_files=None,
+                 archives=None,
                  driver_classpath=None,
                  jars=None,
                  java_class=None,
@@ -112,6 +114,7 @@ class SparkSubmitHook(BaseHook, LoggingMixin):
         self._conn_id = conn_id
         self._files = files
         self._py_files = py_files
+        self._archives = archives
         self._driver_classpath = driver_classpath
         self._jars = jars
         self._java_class = java_class
@@ -136,6 +139,10 @@ class SparkSubmitHook(BaseHook, LoggingMixin):
         self._connection = self._resolve_connection()
         self._is_yarn = 'yarn' in self._connection['master']
         self._is_kubernetes = 'k8s' in self._connection['master']
+        if self._is_kubernetes and kube_client is None:
+            raise RuntimeError(
+                "{} specified by kubernetes dependencies are not installed!".format(
+                    self._connection['master']))
 
         self._should_track_driver_status = self._resolve_should_track_driver_status()
         self._driver_id = None
@@ -235,6 +242,8 @@ class SparkSubmitHook(BaseHook, LoggingMixin):
             connection_cmd += ["--files", self._files]
         if self._py_files:
             connection_cmd += ["--py-files", self._py_files]
+        if self._archives:
+            connection_cmd += ["--archives", self._archives]
         if self._driver_classpath:
             connection_cmd += ["--driver-classpath", self._driver_classpath]
         if self._jars:
@@ -387,14 +396,14 @@ class SparkSubmitHook(BaseHook, LoggingMixin):
             # If we run Kubernetes cluster mode, we want to extract the driver pod id
             # from the logs so we can kill the application when we stop it unexpectedly
             elif self._is_kubernetes:
-                match = re.search('\s*pod name: ((.+?)-([a-z0-9]+)-driver)', line)
+                match = re.search(r'\s*pod name: ((.+?)-([a-z0-9]+)-driver)', line)
                 if match:
                     self._kubernetes_driver_pod = match.groups()[0]
                     self.log.info("Identified spark driver pod: %s",
                                   self._kubernetes_driver_pod)
 
                 # Store the Spark Exit code
-                match_exit_code = re.search('\s*Exit code: (\d+)', line)
+                match_exit_code = re.search(r'\s*Exit code: (\d+)', line)
                 if match_exit_code:
                     self._spark_exit_code = int(match_exit_code.groups()[0])
 
@@ -402,7 +411,7 @@ class SparkSubmitHook(BaseHook, LoggingMixin):
             # we need to extract the driver id from the logs. This allows us to poll for
             # the status using the driver id. Also, we can kill the driver when needed.
             elif self._should_track_driver_status and not self._driver_id:
-                match_driver_id = re.search('(driver-[0-9\-]+)', line)
+                match_driver_id = re.search(r'(driver-[0-9\-]+)', line)
                 if match_driver_id:
                     self._driver_id = match_driver_id.groups()[0]
                     self.log.info("identified spark driver id: {}"
@@ -559,6 +568,6 @@ class SparkSubmitHook(BaseHook, LoggingMixin):
 
                     self.log.info("Spark on K8s killed with response: %s", api_response)
 
-                except ApiException as e:
+                except kube_client.ApiException as e:
                     self.log.info("Exception when attempting to kill Spark on K8s:")
                     self.log.exception(e)

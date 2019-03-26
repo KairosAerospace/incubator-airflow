@@ -7,9 +7,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-# 
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -21,7 +21,7 @@ import errno
 import logging
 import os
 
-from airflow import configuration as conf
+from airflow import settings
 from airflow.utils.helpers import parse_template_string
 from datetime import datetime
 
@@ -41,7 +41,7 @@ class FileProcessorHandler(logging.Handler):
         super(FileProcessorHandler, self).__init__()
         self.handler = None
         self.base_log_folder = base_log_folder
-        self.dag_dir = os.path.expanduser(conf.get('core', 'DAGS_FOLDER'))
+        self.dag_dir = os.path.expanduser(settings.DAGS_FOLDER)
         self.filename_template, self.filename_jinja_template = \
             parse_template_string(filename_template)
 
@@ -116,7 +116,7 @@ class FileProcessorHandler(logging.Handler):
                         os.unlink(latest_log_directory_path)
                         os.symlink(log_directory, latest_log_directory_path)
                 elif (os.path.isdir(latest_log_directory_path) or
-                          os.path.isfile(latest_log_directory_path)):
+                      os.path.isfile(latest_log_directory_path)):
                     logging.warning(
                         "%s already exists as a dir/file. Skip creating symlink.",
                         latest_log_directory_path
