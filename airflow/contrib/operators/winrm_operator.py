@@ -88,7 +88,7 @@ class WinRMOperator(BaseOperator):
         winrm_client = self.winrm_hook.get_conn()
 
         try:
-            self.log.info("Running command: '{command}'...".format(command=self.command))
+            self.log.info("Running command: '%s'...", self.command)
             command_id = self.winrm_hook.winrm_protocol.run_command(
                 winrm_client,
                 self.command
@@ -115,7 +115,7 @@ class WinRMOperator(BaseOperator):
                         self.log.info(line)
                     for line in stderr.decode('utf-8').splitlines():
                         self.log.warning(line)
-                except WinRMOperationTimeoutError as e:
+                except WinRMOperationTimeoutError:
                     # this is an expected error when waiting for a
                     # long-running process, just silently retry
                     pass
@@ -126,7 +126,7 @@ class WinRMOperator(BaseOperator):
         except Exception as e:
             raise AirflowException("WinRM operator error: {0}".format(str(e)))
 
-        if return_code is 0:
+        if return_code == 0:
             # returning output if do_xcom_push is set
             if self.do_xcom_push:
                 enable_pickling = configuration.conf.getboolean(
