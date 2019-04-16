@@ -23,7 +23,7 @@ import copy
 import logging
 import os
 import unittest
-from datetime import timedelta
+from datetime import timedelta, date
 
 from airflow import configuration
 from airflow.exceptions import AirflowException
@@ -44,6 +44,24 @@ TI_CONTEXT_ENV_VARS = ['AIRFLOW_CTX_DAG_ID',
                        'AIRFLOW_CTX_TASK_ID',
                        'AIRFLOW_CTX_EXECUTION_DATE',
                        'AIRFLOW_CTX_DAG_RUN_ID']
+
+
+class Call:
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
+
+def build_recording_function(calls_collection):
+    """
+    We can not use a Mock instance as a PythonOperator callable function or some tests fail with a
+    TypeError: Object of type Mock is not JSON serializable
+    Then using this custom function recording custom Call objects for further testing
+    (replacing Mock.assert_called_with assertion method)
+    """
+    def recording_function(*args, **kwargs):
+        calls_collection.append(Call(*args, **kwargs))
+    return recording_function
 
 
 class PythonOperatorTest(unittest.TestCase):
@@ -120,6 +138,77 @@ class PythonOperatorTest(unittest.TestCase):
                 python_callable=not_callable,
                 task_id='python_operator',
                 dag=self.dag)
+
+    def _assertCallsEqual(self, first, second):
+        self.assertIsInstance(first, Call)
+        self.assertIsInstance(second, Call)
+        self.assertTupleEqual(first.args, second.args)
+        self.assertDictEqual(first.kwargs, second.kwargs)
+
+    def test_python_callable_arguments_are_templatized(self):
+        """Test PythonOperator op_args are templatized"""
+        recorded_calls = []
+
+        task = PythonOperator(
+            task_id='python_operator',
+            # a Mock instance cannot be used as a callable function or test fails with a
+            # TypeError: Object of type Mock is not JSON serializable
+            python_callable=(build_recording_function(recorded_calls)),
+            op_args=[
+                4,
+                date(2019, 1, 1),
+                "dag {{dag.dag_id}} ran on {{ds}}."
+            ],
+            dag=self.dag)
+
+        self.dag.create_dagrun(
+            run_id='manual__' + DEFAULT_DATE.isoformat(),
+            execution_date=DEFAULT_DATE,
+            start_date=DEFAULT_DATE,
+            state=State.RUNNING
+        )
+        task.run(start_date=DEFAULT_DATE, end_date=DEFAULT_DATE)
+
+        self.assertEqual(1, len(recorded_calls))
+        self._assertCallsEqual(
+            recorded_calls[0],
+            Call(4,
+                 date(2019, 1, 1),
+                 "dag {} ran on {}.".format(self.dag.dag_id, DEFAULT_DATE.date().isoformat()))
+        )
+
+    def test_python_callable_keyword_arguments_are_templatized(self):
+        """Test PythonOperator op_kwargs are templatized"""
+        recorded_calls = []
+
+        task = PythonOperator(
+            task_id='python_operator',
+            # a Mock instance cannot be used as a callable function or test fails with a
+            # TypeError: Object of type Mock is not JSON serializable
+            python_callable=(build_recording_function(recorded_calls)),
+            op_kwargs={
+                'an_int': 4,
+                'a_date': date(2019, 1, 1),
+                'a_templated_string': "dag {{dag.dag_id}} ran on {{ds}}."
+            },
+            dag=self.dag)
+
+        self.dag.create_dagrun(
+            run_id='manual__' + DEFAULT_DATE.isoformat(),
+            execution_date=DEFAULT_DATE,
+            start_date=DEFAULT_DATE,
+            state=State.RUNNING
+        )
+        task.run(start_date=DEFAULT_DATE, end_date=DEFAULT_DATE)
+
+        self.assertEqual(1, len(recorded_calls))
+        self._assertCallsEqual(
+            recorded_calls[0],
+            Call(an_int=4,
+                 a_date=date(2019, 1, 1),
+                 a_templated_string="dag {} ran on {}.".format(
+                     self.dag.dag_id, DEFAULT_DATE.date().isoformat()))
+        )
 
     def test_python_operator_shallow_copy_attr(self):
         not_callable = lambda x: x
@@ -288,6 +377,64 @@ class BranchOperatorTest(unittest.TestCase):
                 self.assertEqual(ti.state, State.SKIPPED)
             else:
                 raise
+
+    def test_with_skip_in_branch_downstream_dependencies(self):
+        self.branch_op = BranchPythonOperator(task_id='make_choice',
+                                              dag=self.dag,
+                                              python_callable=lambda: 'branch_1')
+
+        self.branch_op >> self.branch_1 >> self.branch_2
+        self.branch_op >> self.branch_2
+        self.dag.clear()
+
+        dr = self.dag.create_dagrun(
+            run_id="manual__",
+            start_date=timezone.utcnow(),
+            execution_date=DEFAULT_DATE,
+            state=State.RUNNING
+        )
+
+        self.branch_op.run(start_date=DEFAULT_DATE, end_date=DEFAULT_DATE)
+
+        tis = dr.get_task_instances()
+        for ti in tis:
+            if ti.task_id == 'make_choice':
+                self.assertEqual(ti.state, State.SUCCESS)
+            elif ti.task_id == 'branch_1':
+                self.assertEqual(ti.state, State.NONE)
+            elif ti.task_id == 'branch_2':
+                self.assertEqual(ti.state, State.NONE)
+            else:
+                raise Exception
+
+    def test_with_skip_in_branch_downstream_dependencies2(self):
+        self.branch_op = BranchPythonOperator(task_id='make_choice',
+                                              dag=self.dag,
+                                              python_callable=lambda: 'branch_2')
+
+        self.branch_op >> self.branch_1 >> self.branch_2
+        self.branch_op >> self.branch_2
+        self.dag.clear()
+
+        dr = self.dag.create_dagrun(
+            run_id="manual__",
+            start_date=timezone.utcnow(),
+            execution_date=DEFAULT_DATE,
+            state=State.RUNNING
+        )
+
+        self.branch_op.run(start_date=DEFAULT_DATE, end_date=DEFAULT_DATE)
+
+        tis = dr.get_task_instances()
+        for ti in tis:
+            if ti.task_id == 'make_choice':
+                self.assertEqual(ti.state, State.SUCCESS)
+            elif ti.task_id == 'branch_1':
+                self.assertEqual(ti.state, State.SKIPPED)
+            elif ti.task_id == 'branch_2':
+                self.assertEqual(ti.state, State.NONE)
+            else:
+                raise Exception
 
 
 class ShortCircuitOperatorTest(unittest.TestCase):

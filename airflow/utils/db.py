@@ -288,6 +288,14 @@ def initdb(rbac=False):
         Connection(
             conn_id='cassandra_default', conn_type='cassandra',
             host='cassandra', port=9042))
+    merge_conn(
+        Connection(
+            conn_id='dingding_default', conn_type='http',
+            host='', password=''))
+    merge_conn(
+        Connection(
+            conn_id='opsgenie_default', conn_type='http',
+            host='', password=''))
 
     # Known event types
     KET = models.KnownEventType
@@ -361,7 +369,7 @@ def resetdb(rbac):
 
     log.info("Dropping tables that exist")
 
-    models.Base.metadata.drop_all(settings.engine)
+    models.base.Base.metadata.drop_all(settings.engine)
     mc = MigrationContext.configure(settings.engine)
     if mc._version.exists(settings.engine):
         mc._version.drop(settings.engine)

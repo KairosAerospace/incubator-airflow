@@ -18,9 +18,18 @@
 Metrics
 =======
 
-Configuration
--------------
-Airflow can be set up to send metrics to `StatsD <https://github.com/etsy/statsd>`__:
+Airflow can be set up to send metrics to `StatsD <https://github.com/etsy/statsd>`__.
+
+Setup
+-----
+
+First you must install statsd requirement:
+
+.. code-block:: bash
+
+   pip install 'apache-airflow[statsd]'
+
+Add the following lines to your configuration file e.g. ``airflow.cfg``
 
 .. code-block:: bash
 

@@ -96,7 +96,7 @@ class AzureContainerInstanceHook(BaseHook):
         :param name: the name of the container group
         :type name: str
         :return: A tuple with the state, exitcode, and details.
-        If the exitcode is unknown 0 is returned.
+            If the exitcode is unknown 0 is returned.
         :rtype: tuple(state,exitcode,details)
         """
         current_state = self._get_instance_view(resource_group, name).current_state
@@ -108,7 +108,7 @@ class AzureContainerInstanceHook(BaseHook):
         response = self.connection.container_groups.get(resource_group,
                                                         name,
                                                         raw=False)
-        return response.containers[0].instance_view.current_state
+        return response.containers[0].instance_view
 
     def get_messages(self, resource_group, name):
         """
@@ -119,7 +119,7 @@ class AzureContainerInstanceHook(BaseHook):
         :param name: the name of the container group
         :type name: str
         :return: A list of the event messages
-        :rtype: list<str>
+        :rtype: list[str]
         """
         instance_view = self._get_instance_view(resource_group, name)
 
@@ -136,7 +136,7 @@ class AzureContainerInstanceHook(BaseHook):
         :param tail: the size of the tail
         :type tail: int
         :return: A list of log messages
-        :rtype: list<str>
+        :rtype: list[str]
         """
         logs = self.connection.container.list_logs(resource_group, name, name, tail=tail)
         return logs.content.splitlines(True)

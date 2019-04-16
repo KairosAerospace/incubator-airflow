@@ -51,6 +51,7 @@ from airflow.models import Variable, TaskInstance
 from airflow import jobs, models, DAG, utils, macros, settings, exceptions
 from airflow.models import BaseOperator
 from airflow.models.connection import Connection
+from airflow.models.taskfail import TaskFail
 from airflow.operators.bash_operator import BashOperator
 from airflow.operators.check_operator import CheckOperator, ValueCheckOperator
 from airflow.operators.dagrun_operator import TriggerDagRunOperator
@@ -68,7 +69,7 @@ from airflow.utils.state import State
 from airflow.utils.dates import days_ago, infer_time_unit, round_time, scale_time_units
 from airflow.exceptions import AirflowException
 from airflow.configuration import AirflowConfigException, run_command
-from jinja2.sandbox import SecurityError
+from jinja2.exceptions import SecurityError
 from jinja2 import UndefinedError
 from pendulum import utcnow
 
@@ -88,20 +89,7 @@ try:
     import cPickle as pickle
 except ImportError:
     # Python 3
-    import pickle
-
-
-def reset(dag_id=TEST_DAG_ID):
-    session = Session()
-    tis = session.query(models.TaskInstance).filter_by(dag_id=dag_id)
-    tis.delete()
-    session.commit()
-    session.close()
-
-
-configuration.conf.load_test_config()
-if os.environ.get('KUBERNETES_VERSION') is None:
-    reset()
+    import pickle  # type: ignore
 
 
 class OperatorSubclass(BaseOperator):
@@ -131,6 +119,16 @@ class CoreTest(unittest.TestCase):
         self.runme_0 = self.dag_bash.get_task('runme_0')
         self.run_after_loop = self.dag_bash.get_task('run_after_loop')
         self.run_this_last = self.dag_bash.get_task('run_this_last')
+
+    def tearDown(self):
+        if os.environ.get('KUBERNETES_VERSION') is None:
+            session = Session()
+            session.query(models.TaskInstance).filter_by(
+                dag_id=TEST_DAG_ID).delete()
+            session.query(TaskFail).filter_by(
+                dag_id=TEST_DAG_ID).delete()
+            session.commit()
+            session.close()
 
     def test_schedule_dag_no_previous_runs(self):
         """
@@ -943,11 +941,11 @@ class CoreTest(unittest.TestCase):
             f.run(start_date=DEFAULT_DATE, end_date=DEFAULT_DATE, ignore_ti_state=True)
         except Exception:
             pass
-        p_fails = session.query(models.TaskFail).filter_by(
+        p_fails = session.query(TaskFail).filter_by(
             task_id='pass_sleepy',
             dag_id=self.dag.dag_id,
             execution_date=DEFAULT_DATE).all()
-        f_fails = session.query(models.TaskFail).filter_by(
+        f_fails = session.query(TaskFail).filter_by(
             task_id='fail_sleepy',
             dag_id=self.dag.dag_id,
             execution_date=DEFAULT_DATE).all()
@@ -955,77 +953,6 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(0, len(p_fails))
         self.assertEqual(1, len(f_fails))
         self.assertGreaterEqual(sum([f.duration for f in f_fails]), 3)
-
-    def test_dag_stats(self):
-        """Correctly sets/dirties/cleans rows of DagStat table"""
-
-        session = settings.Session()
-
-        session.query(models.DagRun).delete()
-        session.query(models.DagStat).delete()
-        session.commit()
-
-        models.DagStat.update([], session=session)
-
-        self.dag_bash.create_dagrun(
-            run_id="run1",
-            execution_date=DEFAULT_DATE,
-            state=State.RUNNING)
-
-        models.DagStat.update([self.dag_bash.dag_id], session=session)
-
-        qry = session.query(models.DagStat).all()
-
-        self.assertEqual(3, len(qry))
-        self.assertEqual(self.dag_bash.dag_id, qry[0].dag_id)
-        for stats in qry:
-            if stats.state == State.RUNNING:
-                self.assertEqual(stats.count, 1)
-            else:
-                self.assertEqual(stats.count, 0)
-            self.assertFalse(stats.dirty)
-
-        self.dag_bash.create_dagrun(
-            run_id="run2",
-            execution_date=DEFAULT_DATE + timedelta(days=1),
-            state=State.RUNNING)
-
-        models.DagStat.update([self.dag_bash.dag_id], session=session)
-
-        qry = session.query(models.DagStat).all()
-
-        self.assertEqual(3, len(qry))
-        self.assertEqual(self.dag_bash.dag_id, qry[0].dag_id)
-        for stats in qry:
-            if stats.state == State.RUNNING:
-                self.assertEqual(stats.count, 2)
-            else:
-                self.assertEqual(stats.count, 0)
-            self.assertFalse(stats.dirty)
-
-        session.query(models.DagRun).first().state = State.SUCCESS
-        session.commit()
-
-        models.DagStat.update([self.dag_bash.dag_id], session=session)
-
-        qry = session.query(models.DagStat).filter(models.DagStat.state == State.SUCCESS).all()
-        self.assertEqual(1, len(qry))
-        self.assertEqual(self.dag_bash.dag_id, qry[0].dag_id)
-        self.assertEqual(State.SUCCESS, qry[0].state)
-        self.assertEqual(1, qry[0].count)
-        self.assertFalse(qry[0].dirty)
-
-        qry = session.query(models.DagStat).filter(models.DagStat.state == State.RUNNING).all()
-        self.assertEqual(1, len(qry))
-        self.assertEqual(self.dag_bash.dag_id, qry[0].dag_id)
-        self.assertEqual(State.RUNNING, qry[0].state)
-        self.assertEqual(1, qry[0].count)
-        self.assertFalse(qry[0].dirty)
-
-        session.query(models.DagRun).delete()
-        session.query(models.DagStat).delete()
-        session.commit()
-        session.close()
 
     def test_run_command(self):
         if six.PY3:
@@ -2067,49 +1994,75 @@ class WebUiTests(unittest.TestCase):
         response = self.app.get(
             '/admin/airflow/task_stats')
         self.assertIn("example_bash_operator", response.data.decode('utf-8'))
-        url = (
-            "/admin/airflow/success?task_id=print_the_context&"
-            "dag_id=example_python_operator&upstream=false&downstream=false&"
-            "future=false&past=false&execution_date={}&"
-            "origin=/admin".format(EXAMPLE_DAG_DEFAULT_DATE))
-        response = self.app.get(url)
+
+        response = self.app.post("/admin/airflow/success", data=dict(
+            task_id="print_the_context",
+            dag_id="example_python_operator",
+            upstream="false",
+            downstream="false",
+            future="false",
+            past="false",
+            execution_date=EXAMPLE_DAG_DEFAULT_DATE,
+            origin="/admin"))
         self.assertIn("Wait a minute", response.data.decode('utf-8'))
-        response = self.app.get(
-            '/admin/airflow/clear?task_id=print_the_context&'
-            'dag_id=example_python_operator&future=true&past=false&'
-            'upstream=true&downstream=false&'
-            'execution_date={}&'
-            'origin=/admin'.format(EXAMPLE_DAG_DEFAULT_DATE))
+
+        response = self.app.post('/admin/airflow/clear', data=dict(
+            task_id="print_the_context",
+            dag_id="example_python_operator",
+            future="true",
+            past="false",
+            upstream="true",
+            downstream="false",
+            execution_date=EXAMPLE_DAG_DEFAULT_DATE,
+            origin="/admin"))
         self.assertIn("Wait a minute", response.data.decode('utf-8'))
-        url = (
-            "/admin/airflow/success?task_id=section-1&"
-            "dag_id=example_subdag_operator&upstream=true&downstream=true&"
-            "future=false&past=false&execution_date={}&"
-            "origin=/admin".format(EXAMPLE_DAG_DEFAULT_DATE))
-        response = self.app.get(url)
+
+        form = dict(
+            task_id="section-1",
+            dag_id="example_subdag_operator",
+            upstream="true",
+            downstream="true",
+            future="false",
+            past="false",
+            execution_date=EXAMPLE_DAG_DEFAULT_DATE,
+            origin="/admin")
+        response = self.app.post("/admin/airflow/success", data=form)
         self.assertIn("Wait a minute", response.data.decode('utf-8'))
         self.assertIn("section-1-task-1", response.data.decode('utf-8'))
         self.assertIn("section-1-task-2", response.data.decode('utf-8'))
         self.assertIn("section-1-task-3", response.data.decode('utf-8'))
         self.assertIn("section-1-task-4", response.data.decode('utf-8'))
         self.assertIn("section-1-task-5", response.data.decode('utf-8'))
-        response = self.app.get(url + "&confirmed=true")
-        url = (
-            "/admin/airflow/clear?task_id=print_the_context&"
-            "dag_id=example_python_operator&future=false&past=false&"
-            "upstream=false&downstream=true&"
-            "execution_date={}&"
-            "origin=/admin".format(EXAMPLE_DAG_DEFAULT_DATE))
-        response = self.app.get(url)
+        form["confirmed"] = "true"
+        response = self.app.post("/admin/airflow/success", data=form)
+        self.assertEqual(response.status_code, 302)
+
+        form = dict(
+            task_id="print_the_context",
+            dag_id="example_python_operator",
+            future="false",
+            past="false",
+            upstream="false",
+            downstream="true",
+            execution_date=EXAMPLE_DAG_DEFAULT_DATE,
+            origin="/admin")
+        response = self.app.post("/admin/airflow/clear", data=form)
         self.assertIn("Wait a minute", response.data.decode('utf-8'))
-        response = self.app.get(url + "&confirmed=true")
-        url = (
-            "/admin/airflow/clear?task_id=section-1-task-1&"
-            "dag_id=example_subdag_operator.section-1&future=false&past=false&"
-            "upstream=false&downstream=true&recursive=true&"
-            "execution_date={}&"
-            "origin=/admin".format(EXAMPLE_DAG_DEFAULT_DATE))
-        response = self.app.get(url)
+        form["confirmed"] = "true"
+        response = self.app.post("/admin/airflow/clear", data=form)
+        self.assertEqual(response.status_code, 302)
+
+        form = dict(
+            task_id="section-1-task-1",
+            dag_id="example_subdag_operator.section-1",
+            future="false",
+            past="false",
+            upstream="false",
+            downstream="true",
+            recursive="true",
+            execution_date=EXAMPLE_DAG_DEFAULT_DATE,
+            origin="/admin")
+        response = self.app.post("/admin/airflow/clear", data=form)
         self.assertIn("Wait a minute", response.data.decode('utf-8'))
         self.assertIn("example_subdag_operator.end",
                       response.data.decode('utf-8'))
@@ -2686,13 +2639,6 @@ class ConnectionTest(unittest.TestCase):
         assert conns[0].login == 'username'
         assert conns[0].password == 'password'
         assert conns[0].port == 5432
-
-    def test_get_connections_db(self):
-        conns = BaseHook.get_connections(conn_id='airflow_db')
-        assert len(conns) == 1
-        assert conns[0].host == 'localhost'
-        assert conns[0].schema == 'airflow'
-        assert conns[0].login == 'root'
 
 
 class WebHDFSHookTest(unittest.TestCase):
