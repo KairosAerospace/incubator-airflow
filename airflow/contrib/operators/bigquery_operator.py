@@ -105,7 +105,7 @@ class BigQueryOperator(BaseOperator):
     :param cluster_fields: Request that the result of this query be stored sorted
         by one or more columns. This is only available in conjunction with
         time_partitioning. The order of columns given determines the sort order.
-    :type cluster_fields: list of str
+    :type cluster_fields: list[str]
     :param location: The geographic location of the job. Required except for
         US and EU. See details at
         https://cloud.google.com/bigquery/docs/locations#specifying_your_location
@@ -435,7 +435,7 @@ class BigQueryCreateExternalTableOperator(BaseOperator):
     :type delegate_to: str
     :param src_fmt_configs: configure optional fields specific to the source format
     :type src_fmt_configs: dict
-    :param labels a dictionary containing labels for the table, passed to BigQuery
+    :param labels: a dictionary containing labels for the table, passed to BigQuery
     :type labels: dict
     """
     template_fields = ('bucket', 'source_objects',
@@ -528,9 +528,10 @@ class BigQueryCreateExternalTableOperator(BaseOperator):
 
 
 class BigQueryDeleteDatasetOperator(BaseOperator):
-    """"
+    """
     This operator deletes an existing dataset from your Project in Big query.
     https://cloud.google.com/bigquery/docs/reference/rest/v2/datasets/delete
+
     :param project_id: The project id of the dataset.
     :type project_id: str
     :param dataset_id: The dataset to be deleted.
@@ -579,7 +580,7 @@ class BigQueryDeleteDatasetOperator(BaseOperator):
 
 
 class BigQueryCreateEmptyDatasetOperator(BaseOperator):
-    """"
+    """
     This operator is used to create new dataset for your Project in Big query.
     https://cloud.google.com/bigquery/docs/reference/rest/v2/datasets#resource
 

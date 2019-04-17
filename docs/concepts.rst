@@ -131,26 +131,28 @@ described elsewhere in this document.
 
 Airflow provides operators for many common tasks, including:
 
-- ``BashOperator`` - executes a bash command
-- ``PythonOperator`` - calls an arbitrary Python function
-- ``EmailOperator`` - sends an email
-- ``SimpleHttpOperator`` - sends an HTTP request
-- ``MySqlOperator``, ``SqliteOperator``, ``PostgresOperator``, ``MsSqlOperator``, ``OracleOperator``, ``JdbcOperator``, etc. - executes a SQL command
+- :class:`~airflow.operators.bash_operator.BashOperator` - executes a bash command
+- :class:`~airflow.operators.python_operator.PythonOperator` - calls an arbitrary Python function
+- :class:`~airflow.operators.email_operator.EmailOperator` - sends an email
+- :class:`~airflow.operators.http_operator.SimpleHttpOperator` - sends an HTTP request
+- :class:`~airflow.operators.mysql_operator.MySqlOperator`,
+  :class:`~airflow.operators.sqlite_operator.SqliteOperator`,
+  :class:`~airflow.operators.postgres_operator.PostgresOperator`,
+  :class:`~airflow.operators.mssql_operator.MsSqlOperator`,
+  :class:`~airflow.operators.oracle_operator.OracleOperator`,
+  :class:`~airflow.operators.jdbc_operator.JdbcOperator`, etc. - executes a SQL command
 - ``Sensor`` - waits for a certain time, file, database row, S3 key, etc...
 
 In addition to these basic building blocks, there are many more specific
-operators: ``DockerOperator``, ``HiveOperator``, ``S3FileTransformOperator``,
-``PrestoToMysqlOperator``, ``SlackOperator``... you get the idea!
-
-The ``airflow/contrib/`` directory contains yet more operators built by the
-community. These operators aren't always as complete or well-tested as those in
-the main distribution, but allow users to more easily add new functionality to
-the platform.
+operators: :class:`~airflow.operators.docker_operator.DockerOperator`,
+:class:`~airflow.operators.hive_operator.HiveOperator`, :class:`~airflow.operators.s3_file_transform_operator.S3FileTransformOperator(`,
+:class:`~airflow.operators.presto_to_mysql.PrestoToMySqlTransfer`,
+:class:`~airflow.operators.slack_operator.SlackAPIOperator`... you get the idea!
 
 Operators are only loaded by Airflow if they are assigned to a DAG.
 
-See :doc:`howto/operator` for how to use Airflow operators.
-
+See :doc:`howto/operator/index` for how to use Airflow operators.
+ 
 DAG Assignment
 --------------
 
@@ -367,7 +369,7 @@ need to supply an explicit connection ID. For example, the default
 ``conn_id`` for the :class:`~airflow.hooks.postgres_hook.PostgresHook` is
 ``postgres_default``.
 
-See :doc:`howto/manage-connections` for how to create and manage connections.
+See :doc:`howto/connection/index` for how to create and manage connections.
 
 Queues
 ======
@@ -389,6 +391,8 @@ resource perspective (for say very lightweight tasks where one worker
 could take thousands of tasks without a problem), or from an environment
 perspective (you want a worker running from within the Spark cluster
 itself because it needs a very specific environment and security rights).
+
+.. _concepts:xcom:
 
 XComs
 =====
@@ -430,7 +434,7 @@ passed, then a corresponding list of XCom values is returned.
 It is also possible to pull XCom directly in a template, here's an example
 of what this may look like:
 
-.. code:: sql
+.. code:: jinja
 
     SELECT * FROM {{ task_instance.xcom_pull(task_ids='foo', key='table_name') }}
 
@@ -668,6 +672,7 @@ while creating tasks:
 * ``one_failed``: fires as soon as at least one parent has failed, it does not wait for all parents to be done
 * ``one_success``: fires as soon as at least one parent succeeds, it does not wait for all parents to be done
 * ``none_failed``: all parents have not failed (``failed`` or ``upstream_failed``) i.e. all parents have succeeded or been skipped
+* ``none_skipped``: no parent is in a ``skipped`` state, i.e. all parents are in a ``success``, ``failed``, or ``upstream_failed`` state
 * ``dummy``: dependencies are just for show, trigger at will
 
 Note that these can be used in conjunction with ``depends_on_past`` (boolean)
@@ -677,7 +682,7 @@ previous schedule for the task hasn't succeeded.
 One must be aware of the interaction between trigger rules and skipped tasks
 in schedule level. Skipped tasks will cascade through trigger rules 
 ``all_success`` and ``all_failed`` but not ``all_done``, ``one_failed``, ``one_success``,
-``none_failed`` and ``dummy``. 
+``none_failed``, ``none_skipped`` and ``dummy``.
 
 For example, consider the following DAG:
 
@@ -891,7 +896,7 @@ Jinja Templating
 
 Airflow leverages the power of
 `Jinja Templating <http://jinja.pocoo.org/docs/dev/>`_ and this can be a
-powerful tool to use in combination with macros (see the :ref:`macros` section).
+powerful tool to use in combination with macros (see the :doc:`macros` section).
 
 For example, say you want to pass the execution date as an environment variable
 to a Bash script using the ``BashOperator``.

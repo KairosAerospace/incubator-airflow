@@ -33,9 +33,7 @@ import getpass
 import reprlib
 import argparse
 from builtins import input
-from collections import namedtuple
 
-from airflow.models.connection import Connection
 from airflow.utils.timezone import parse as parsedate
 import json
 from tabulate import tabulate
@@ -50,6 +48,7 @@ import time
 import psutil
 import re
 from urllib.parse import urlunparse
+from typing import Any
 
 import airflow
 from airflow import api
@@ -57,9 +56,9 @@ from airflow import jobs, settings
 from airflow import configuration as conf
 from airflow.exceptions import AirflowException, AirflowWebServerTimeout
 from airflow.executors import GetDefaultExecutor
-from airflow.models import (DagModel, DagBag, TaskInstance,
-                            DagPickle, DagRun, Variable, DagStat, DAG)
-
+from airflow.models import DagModel, DagBag, TaskInstance, DagRun, Variable, DAG
+from airflow.models.connection import Connection
+from airflow.models.dagpickle import DagPickle
 from airflow.ti_deps.dep_context import (DepContext, SCHEDULER_DEPS)
 from airflow.utils import cli as cli_utils, db
 from airflow.utils.net import get_hostname
@@ -70,11 +69,10 @@ from airflow.www_rbac.app import cached_app as cached_app_rbac
 from airflow.www_rbac.app import create_app as create_app_rbac
 from airflow.www_rbac.app import cached_appbuilder
 
-from sqlalchemy import func
 from sqlalchemy.orm import exc
 
 api.load_auth()
-api_module = import_module(conf.get('cli', 'api_client'))
+api_module = import_module(conf.get('cli', 'api_client'))  # type: Any
 api_client = api_module.Client(api_base_url=conf.get('cli', 'endpoint_url'),
                                auth=api.api_auth.client_auth)
 
@@ -604,6 +602,17 @@ def next_execution(args):
 
 
 @cli_utils.action_logging
+def rotate_fernet_key(args):
+    session = settings.Session()
+    for conn in session.query(Connection).filter(
+            Connection.is_encrypted | Connection.is_extra_encrypted):
+        conn.rotate_fernet_key()
+    for var in session.query(Variable).filter(Variable.is_encrypted):
+        var.rotate_fernet_key()
+    session.commit()
+
+
+@cli_utils.action_logging
 def list_dags(args):
     dagbag = DagBag(process_subdir(args.subdir))
     s = textwrap.dedent("""\n
@@ -1103,18 +1112,6 @@ def upgradedb(args):  # noqa
     print("DB: " + repr(settings.engine.url))
     db.upgradedb()
 
-    # Populate DagStats table
-    session = settings.Session()
-    ds_rows = session.query(DagStat).count()
-    if not ds_rows:
-        qry = (
-            session.query(DagRun.dag_id, DagRun.state, func.count('*'))
-                   .group_by(DagRun.dag_id, DagRun.state)
-        )
-        for dag_id, state, count in qry:
-            session.add(DagStat(dag_id=dag_id, state=state, count=count))
-        session.commit()
-
 
 @cli_utils.action_logging
 def version(args):  # noqa
@@ -1470,9 +1467,17 @@ def sync_perm(args): # noqa
         print('The sync_perm command only works for rbac UI.')
 
 
-Arg = namedtuple(
-    'Arg', ['flags', 'help', 'action', 'default', 'nargs', 'type', 'choices', 'metavar'])
-Arg.__new__.__defaults__ = (None, None, None, None, None, None, None)
+class Arg(object):
+    def __init__(self, flags=None, help=None, action=None, default=None, nargs=None,
+                 type=None, choices=None, metavar=None):
+        self.flags = flags
+        self.help = help
+        self.action = action
+        self.default = default
+        self.nargs = nargs
+        self.type = type
+        self.choices = choices
+        self.metavar = metavar
 
 
 class CLIFactory(object):
@@ -2103,7 +2108,14 @@ class CLIFactory(object):
             'func': next_execution,
             'help': "Get the next execution datetime of a DAG.",
             'args': ('dag_id', 'subdir')
-        }
+        },
+        {
+            'func': rotate_fernet_key,
+            'help': 'Rotate all encrypted connection credentials and variables; see '
+                    'https://airflow.readthedocs.io/en/stable/howto/secure-connections.html'
+                    '#rotating-encryption-keys.',
+            'args': (),
+        },
     )
     subparsers_dict = {sp['func'].__name__: sp for sp in subparsers}
     dag_subparsers = (
@@ -2125,8 +2137,8 @@ class CLIFactory(object):
                     continue
                 arg = cls.args[arg]
                 kwargs = {
-                    f: getattr(arg, f)
-                    for f in arg._fields if f != 'flags' and getattr(arg, f)}
+                    f: v
+                    for f, v in vars(arg).items() if f != 'flags' and v}
                 sp.add_argument(*arg.flags, **kwargs)
             sp.set_defaults(func=sub['func'])
         return parser

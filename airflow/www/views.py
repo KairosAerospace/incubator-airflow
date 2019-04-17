@@ -22,6 +22,7 @@ import ast
 import codecs
 import copy
 import datetime as dt
+from io import BytesIO
 import itertools
 import json
 import logging
@@ -40,7 +41,6 @@ from flask import (
     abort, jsonify, redirect, url_for, request, Markup, Response,
     current_app, render_template, make_response, send_file)
 from flask import flash
-from flask._compat import PY2
 from flask_admin import BaseView, expose, AdminIndexView
 from flask_admin.actions import action
 from flask_admin.babel import lazy_gettext
@@ -49,7 +49,7 @@ from flask_admin.form.fields import DateTimeField
 from flask_admin.tools import iterdecode
 from jinja2 import escape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
-from past.builtins import basestring, unicode
+from past.builtins import basestring
 from pygments import highlight, lexers
 from pygments.formatters import HtmlFormatter
 from sqlalchemy import or_, desc, and_, union_all
@@ -65,7 +65,7 @@ from airflow.api.common.experimental.mark_tasks import (set_dag_run_state_to_run
                                                         set_dag_run_state_to_success,
                                                         set_dag_run_state_to_failed)
 from airflow.exceptions import AirflowException
-from airflow.models import BaseOperator
+from airflow.models import BaseOperator, errors
 from airflow.models import XCom, DagRun
 from airflow.models.connection import Connection
 from airflow.operators.subdag_operator import SubDagOperator
@@ -82,10 +82,6 @@ from airflow.www import utils as wwwutils
 from airflow.www.forms import (DateTimeForm, DateTimeWithNumRunsForm,
                                DateTimeWithNumRunsWithDagRunsForm)
 from airflow.www.validators import GreaterEqualThan
-if PY2:
-    from cStringIO import StringIO
-else:
-    from io import StringIO
 
 QUERY_LIMIT = 100000
 CHART_LIMIT = 200000
@@ -680,6 +676,7 @@ class Airflow(BaseView):
         dag_id = request.args.get('dag_id')
         dag = dagbag.get_dag(dag_id)
         title = "DAG details"
+        root = request.args.get('root', '')
 
         TI = models.TaskInstance
         states = session\
@@ -688,9 +685,17 @@ class Airflow(BaseView):
             .group_by(TI.state)\
             .all()
 
+        active_runs = models.DagRun.find(
+            dag_id=dag.dag_id,
+            state=State.RUNNING,
+            external_trigger=False,
+            session=session
+        )
+
         return self.render(
             'airflow/dag_details.html',
-            dag=dag, title=title, states=states, State=State)
+            dag=dag, title=title, root=root, states=states, State=State,
+            active_runs=active_runs)
 
     @current_app.errorhandler(404)
     def circles(self):
@@ -740,6 +745,7 @@ class Airflow(BaseView):
         execution_date = request.args.get('execution_date')
         dttm = pendulum.parse(execution_date)
         form = DateTimeForm(data={'execution_date': dttm})
+        root = request.args.get('root', '')
         dag = dagbag.get_dag(dag_id)
         task = copy.copy(dag.get_task(task_id))
         ti = models.TaskInstance(task=task, execution_date=dttm)
@@ -764,7 +770,8 @@ class Airflow(BaseView):
             task_id=task_id,
             execution_date=execution_date,
             form=form,
-            title=title, )
+            root=root,
+            title=title)
 
     @expose('/get_logs_with_metadata')
     @login_required
@@ -819,17 +826,19 @@ class Airflow(BaseView):
                 ti.task = dag.get_task(ti.task_id)
                 logs, metadatas = handler.read(ti, try_number, metadata=metadata)
                 metadata = metadatas[0]
-            for i, log in enumerate(logs):
-                if PY2 and not isinstance(log, unicode):
-                    logs[i] = log.decode('utf-8')
 
             if response_format == 'json':
                 message = logs[0] if try_number is not None else logs
                 return jsonify(message=message, metadata=metadata)
 
-            file_obj = StringIO('\n'.join(logs))
+            file_obj = BytesIO(b'\n'.join(
+                log.encode('utf-8') for log in logs
+            ))
             filename_template = conf.get('core', 'LOG_FILENAME_TEMPLATE')
-            attachment_filename = render_log_filename(ti, try_number, filename_template)
+            attachment_filename = render_log_filename(
+                ti=ti,
+                try_number="all" if try_number is None else try_number,
+                filename_template=filename_template)
             return send_file(file_obj, as_attachment=True,
                              attachment_filename=attachment_filename)
         except AttributeError as e:
@@ -862,11 +871,13 @@ class Airflow(BaseView):
                 # Tasks in reschedule state decremented the try number
                 num_logs += 1
         logs = [''] * num_logs
+        root = request.args.get('root', '')
         return self.render(
             'airflow/ti_log.html',
             logs=logs, dag=dag, title="Log by attempts",
             dag_id=dag.dag_id, task_id=task_id,
-            execution_date=execution_date, form=form)
+            execution_date=execution_date, form=form,
+            root=root)
 
     @expose('/task')
     @login_required
@@ -881,6 +892,7 @@ class Airflow(BaseView):
         execution_date = request.args.get('execution_date')
         dttm = pendulum.parse(execution_date)
         form = DateTimeForm(data={'execution_date': dttm})
+        root = request.args.get('root', '')
         dag = dagbag.get_dag(dag_id)
 
         if not dag or task_id not in dag.task_ids:
@@ -954,6 +966,7 @@ class Airflow(BaseView):
             execution_date=execution_date,
             special_attrs_rendered=special_attrs_rendered,
             form=form,
+            root=root,
             dag=dag, title=title)
 
     @expose('/xcom')
@@ -968,6 +981,7 @@ class Airflow(BaseView):
         execution_date = request.args.get('execution_date')
         dttm = pendulum.parse(execution_date)
         form = DateTimeForm(data={'execution_date': dttm})
+        root = request.args.get('root', '')
         dm_db = models.DagModel
         ti_db = models.TaskInstance
         dag = session.query(dm_db).filter(dm_db.dag_id == dag_id).first()
@@ -995,24 +1009,26 @@ class Airflow(BaseView):
             task_id=task_id,
             execution_date=execution_date,
             form=form,
+            root=root,
             dag=dag, title=title)
 
-    @expose('/run')
+    @expose('/run', methods=['POST'])
     @login_required
     @wwwutils.action_logging
     @wwwutils.notify_owner
     def run(self):
-        dag_id = request.args.get('dag_id')
-        task_id = request.args.get('task_id')
-        origin = request.args.get('origin')
+        dag_id = request.form.get('dag_id')
+        task_id = request.form.get('task_id')
+        origin = request.form.get('origin')
+
         dag = dagbag.get_dag(dag_id)
         task = dag.get_task(task_id)
 
-        execution_date = request.args.get('execution_date')
+        execution_date = request.form.get('execution_date')
         execution_date = pendulum.parse(execution_date)
-        ignore_all_deps = request.args.get('ignore_all_deps') == "true"
-        ignore_task_deps = request.args.get('ignore_task_deps') == "true"
-        ignore_ti_state = request.args.get('ignore_ti_state') == "true"
+        ignore_all_deps = request.form.get('ignore_all_deps') == "true"
+        ignore_task_deps = request.form.get('ignore_task_deps') == "true"
+        ignore_ti_state = request.form.get('ignore_ti_state') == "true"
 
         from airflow.executors import GetDefaultExecutor
         executor = GetDefaultExecutor()
@@ -1065,7 +1081,7 @@ class Airflow(BaseView):
             "it should start any moment now.".format(ti))
         return redirect(origin)
 
-    @expose('/delete')
+    @expose('/delete', methods=['POST'])
     @login_required
     @wwwutils.action_logging
     @wwwutils.notify_owner
@@ -1073,8 +1089,8 @@ class Airflow(BaseView):
         from airflow.api.common.experimental import delete_dag
         from airflow.exceptions import DagNotFound, DagFileExists
 
-        dag_id = request.args.get('dag_id')
-        origin = request.args.get('origin') or "/admin/"
+        dag_id = request.values.get('dag_id')
+        origin = request.values.get('origin') or "/admin/"
 
         try:
             delete_dag.delete_dag(dag_id)
@@ -1091,14 +1107,14 @@ class Airflow(BaseView):
         # Upon successful delete return to origin
         return redirect(origin)
 
-    @expose('/trigger')
+    @expose('/trigger', methods=['POST'])
     @login_required
     @wwwutils.action_logging
     @wwwutils.notify_owner
     @provide_session
     def trigger(self, session=None):
-        dag_id = request.args.get('dag_id')
-        origin = request.args.get('origin') or "/admin/"
+        dag_id = request.values.get('dag_id')
+        origin = request.values.get('origin') or "/admin/"
         dag = session.query(models.DagModel).filter(models.DagModel.dag_id == dag_id).first()
         if not dag:
             flash("Cannot find dag {}".format(dag_id))
@@ -1161,24 +1177,24 @@ class Airflow(BaseView):
 
         return response
 
-    @expose('/clear')
+    @expose('/clear', methods=['POST'])
     @login_required
     @wwwutils.action_logging
     @wwwutils.notify_owner
     def clear(self):
-        dag_id = request.args.get('dag_id')
-        task_id = request.args.get('task_id')
-        origin = request.args.get('origin')
+        dag_id = request.form.get('dag_id')
+        task_id = request.form.get('task_id')
+        origin = request.form.get('origin')
         dag = dagbag.get_dag(dag_id)
 
-        execution_date = request.args.get('execution_date')
+        execution_date = request.form.get('execution_date')
         execution_date = pendulum.parse(execution_date)
-        confirmed = request.args.get('confirmed') == "true"
-        upstream = request.args.get('upstream') == "true"
-        downstream = request.args.get('downstream') == "true"
-        future = request.args.get('future') == "true"
-        past = request.args.get('past') == "true"
-        recursive = request.args.get('recursive') == "true"
+        confirmed = request.form.get('confirmed') == "true"
+        upstream = request.form.get('upstream') == "true"
+        downstream = request.form.get('downstream') == "true"
+        future = request.form.get('future') == "true"
+        past = request.form.get('past') == "true"
+        recursive = request.form.get('recursive') == "true"
 
         dag = dag.sub_dag(
             task_regex=r"^{0}$".format(task_id),
@@ -1191,15 +1207,15 @@ class Airflow(BaseView):
         return self._clear_dag_tis(dag, start_date, end_date, origin,
                                    recursive=recursive, confirmed=confirmed)
 
-    @expose('/dagrun_clear')
+    @expose('/dagrun_clear', methods=['POST'])
     @login_required
     @wwwutils.action_logging
     @wwwutils.notify_owner
     def dagrun_clear(self):
-        dag_id = request.args.get('dag_id')
-        origin = request.args.get('origin')
-        execution_date = request.args.get('execution_date')
-        confirmed = request.args.get('confirmed') == "true"
+        dag_id = request.form.get('dag_id')
+        origin = request.form.get('origin')
+        execution_date = request.form.get('execution_date')
+        confirmed = request.form.get('confirmed') == "true"
 
         dag = dagbag.get_dag(dag_id)
         execution_date = pendulum.parse(execution_date)
@@ -1289,27 +1305,27 @@ class Airflow(BaseView):
 
             return response
 
-    @expose('/dagrun_failed')
+    @expose('/dagrun_failed', methods=['POST'])
     @login_required
     @wwwutils.action_logging
     @wwwutils.notify_owner
     def dagrun_failed(self):
-        dag_id = request.args.get('dag_id')
-        execution_date = request.args.get('execution_date')
-        confirmed = request.args.get('confirmed') == 'true'
-        origin = request.args.get('origin')
+        dag_id = request.form.get('dag_id')
+        execution_date = request.form.get('execution_date')
+        confirmed = request.form.get('confirmed') == 'true'
+        origin = request.form.get('origin')
         return self._mark_dagrun_state_as_failed(dag_id, execution_date,
                                                  confirmed, origin)
 
-    @expose('/dagrun_success')
+    @expose('/dagrun_success', methods=['POST'])
     @login_required
     @wwwutils.action_logging
     @wwwutils.notify_owner
     def dagrun_success(self):
-        dag_id = request.args.get('dag_id')
-        execution_date = request.args.get('execution_date')
-        confirmed = request.args.get('confirmed') == 'true'
-        origin = request.args.get('origin')
+        dag_id = request.form.get('dag_id')
+        execution_date = request.form.get('execution_date')
+        confirmed = request.form.get('confirmed') == 'true'
+        origin = request.form.get('origin')
         return self._mark_dagrun_state_as_success(dag_id, execution_date,
                                                   confirmed, origin)
 
@@ -1355,41 +1371,41 @@ class Airflow(BaseView):
 
         return response
 
-    @expose('/failed')
+    @expose('/failed', methods=['POST'])
     @login_required
     @wwwutils.action_logging
     @wwwutils.notify_owner
     def failed(self):
-        dag_id = request.args.get('dag_id')
-        task_id = request.args.get('task_id')
-        origin = request.args.get('origin')
-        execution_date = request.args.get('execution_date')
+        dag_id = request.form.get('dag_id')
+        task_id = request.form.get('task_id')
+        origin = request.form.get('origin')
+        execution_date = request.form.get('execution_date')
 
-        confirmed = request.args.get('confirmed') == "true"
-        upstream = request.args.get('upstream') == "true"
-        downstream = request.args.get('downstream') == "true"
-        future = request.args.get('future') == "true"
-        past = request.args.get('past') == "true"
+        confirmed = request.form.get('confirmed') == "true"
+        upstream = request.form.get('upstream') == "true"
+        downstream = request.form.get('downstream') == "true"
+        future = request.form.get('future') == "true"
+        past = request.form.get('past') == "true"
 
         return self._mark_task_instance_state(dag_id, task_id, origin, execution_date,
                                               confirmed, upstream, downstream,
                                               future, past, State.FAILED)
 
-    @expose('/success')
+    @expose('/success', methods=['POST'])
     @login_required
     @wwwutils.action_logging
     @wwwutils.notify_owner
     def success(self):
-        dag_id = request.args.get('dag_id')
-        task_id = request.args.get('task_id')
-        origin = request.args.get('origin')
-        execution_date = request.args.get('execution_date')
+        dag_id = request.form.get('dag_id')
+        task_id = request.form.get('task_id')
+        origin = request.form.get('origin')
+        execution_date = request.form.get('execution_date')
 
-        confirmed = request.args.get('confirmed') == "true"
-        upstream = request.args.get('upstream') == "true"
-        downstream = request.args.get('downstream') == "true"
-        future = request.args.get('future') == "true"
-        past = request.args.get('past') == "true"
+        confirmed = request.form.get('confirmed') == "true"
+        upstream = request.form.get('upstream') == "true"
+        downstream = request.form.get('downstream') == "true"
+        future = request.form.get('future') == "true"
+        past = request.form.get('past') == "true"
 
         return self._mark_task_instance_state(dag_id, task_id, origin, execution_date,
                                               confirmed, upstream, downstream,
@@ -1878,10 +1894,10 @@ class Airflow(BaseView):
     @provide_session
     def paused(self, session=None):
         DagModel = models.DagModel
-        dag_id = request.args.get('dag_id')
+        dag_id = request.values.get('dag_id')
         orm_dag = session.query(
             DagModel).filter(DagModel.dag_id == dag_id).first()
-        if request.args.get('is_paused') == 'false':
+        if request.values.get('is_paused') == 'false':
             orm_dag.is_paused = True
         else:
             orm_dag.is_paused = False
@@ -1891,32 +1907,29 @@ class Airflow(BaseView):
         dagbag.get_dag(dag_id)
         return "OK"
 
-    @expose('/refresh')
+    @expose('/refresh', methods=['POST'])
     @login_required
     @wwwutils.action_logging
     @provide_session
     def refresh(self, session=None):
-        DagModel = models.DagModel
-        dag_id = request.args.get('dag_id')
-        orm_dag = session.query(
-            DagModel).filter(DagModel.dag_id == dag_id).first()
+        # TODO: Is this method still needed after AIRFLOW-3561?
+        dm = models.DagModel
+        dag_id = request.values.get('dag_id')
+        orm_dag = session.query(dm).filter(dm.dag_id == dag_id).first()
 
         if orm_dag:
             orm_dag.last_expired = timezone.utcnow()
             session.merge(orm_dag)
         session.commit()
 
-        models.DagStat.update([dag_id], session=session, dirty_only=False)
-
-        dagbag.get_dag(dag_id)
         flash("DAG [{}] is now fresh as a daisy".format(dag_id))
         return redirect(request.referrer)
 
-    @expose('/refresh_all')
+    @expose('/refresh_all', methods=['POST'])
     @login_required
     @wwwutils.action_logging
     def refresh_all(self):
-        dagbag.collect_dags(only_if_updated=False)
+        # TODO: Is this method still needed after AIRFLOW-3561?
         flash("All DAGs are now up to date")
         return redirect('/')
 
@@ -2045,7 +2058,7 @@ class Airflow(BaseView):
             return ("Error: form airflow/variables/{}.html "
                     "not found.").format(form), 404
 
-    @expose('/varimport', methods=["GET", "POST"])
+    @expose('/varimport', methods=['POST'])
     @login_required
     @wwwutils.action_logging
     def varimport(self):
@@ -2138,7 +2151,7 @@ class HomeView(AdminIndexView):
 
         dags = query.offset(start).limit(dags_per_page).all()
 
-        import_errors = session.query(models.ImportError).all()
+        import_errors = session.query(errors.ImportError).all()
         for ie in import_errors:
             flash(
                 "Broken DAG: [{ie.filename}] {ie.stacktrace}".format(ie=ie),
@@ -2201,7 +2214,7 @@ class QueryView(wwwutils.DataProfilingMixin, BaseView):
         results = None
         has_data = False
         error = False
-        if conn_id_str:
+        if conn_id_str and request.method == 'POST':
             db = [db for db in dbs if db.conn_id == conn_id_str][0]
             hook = db.get_hook()
             try:
@@ -2408,7 +2421,7 @@ class ChartModelView(wwwutils.DataProfilingMixin, AirflowModelView):
         model.last_modified = timezone.utcnow()
 
 
-chart_mapping = (
+chart_mapping = dict((
     ('line', 'lineChart'),
     ('spline', 'lineChart'),
     ('bar', 'multiBarChart'),
@@ -2417,8 +2430,7 @@ chart_mapping = (
     ('stacked_area', 'stackedAreaChart'),
     ('percent_area', 'stackedAreaChart'),
     ('datatable', 'datatable'),
-)
-chart_mapping = dict(chart_mapping)
+))
 
 
 class KnownEventView(wwwutils.DataProfilingMixin, AirflowModelView):
@@ -2673,7 +2685,6 @@ class DagRunModelView(ModelViewOnly):
         dirty_ids = []
         for row in deleted:
             dirty_ids.append(row.dag_id)
-        models.DagStat.update(dirty_ids, dirty_only=False, session=session)
 
     @action('set_running', "Set state to 'running'", None)
     @provide_session
@@ -2687,7 +2698,6 @@ class DagRunModelView(ModelViewOnly):
                 count += 1
                 dr.state = State.RUNNING
                 dr.start_date = timezone.utcnow()
-            models.DagStat.update(dirty_ids, session=session)
             flash(
                 "{count} dag runs were set to running".format(**locals()))
         except Exception as ex:
@@ -2712,7 +2722,6 @@ class DagRunModelView(ModelViewOnly):
                                                 dr.execution_date,
                                                 commit=True,
                                                 session=session)
-            models.DagStat.update(dirty_ids, session=session)
             altered_ti_count = len(altered_tis)
             flash(
                 "{count} dag runs and {altered_ti_count} task instances "
@@ -2739,7 +2748,6 @@ class DagRunModelView(ModelViewOnly):
                                                  dr.execution_date,
                                                  commit=True,
                                                  session=session)
-            models.DagStat.update(dirty_ids, session=session)
             altered_ti_count = len(altered_tis)
             flash(
                 "{count} dag runs and {altered_ti_count} task instances "
@@ -2773,7 +2781,6 @@ class DagRunModelView(ModelViewOnly):
                 session=session)
 
         altered_ti_count = len(altered_tis)
-        models.DagStat.update([dagrun.dag_id], session=session)
         flash(
             "1 dag run and {altered_ti_count} task instances "
             "were set to '{dagrun.state}'".format(**locals()))

@@ -45,21 +45,20 @@ validation, optionality, api_version supported and nested fields (for unions and
 
 Typically (for clarity and in order to aid syntax highlighting) the array of
 dicts should be defined as series of dict() executions. Fragment of example
-specification might look as follows:
+specification might look as follows::
 
-```
-SPECIFICATION =[
-   dict(name="an_union", type="union", optional=True, fields=[
-       dict(name="variant_1", type="dict"),
-       dict(name="variant_2", regexp=r'^.+$', api_version='v1beta2'),
-   ),
-   dict(name="an_union", type="dict", fields=[
-       dict(name="field_1", type="dict"),
-       dict(name="field_2", regexp=r'^.+$'),
-   ),
-   ...
-]
-```
+    SPECIFICATION =[
+       dict(name="an_union", type="union", optional=True, fields=[
+           dict(name="variant_1", type="dict"),
+           dict(name="variant_2", regexp=r'^.+$', api_version='v1beta2'),
+       ),
+       dict(name="an_union", type="dict", fields=[
+           dict(name="field_1", type="dict"),
+           dict(name="field_2", regexp=r'^.+$'),
+       ),
+       ...
+    ]
+
 
 Each field should have key = "name" indicating field name. The field can be of one of the
 following types:
@@ -133,8 +132,8 @@ Here are the guidelines that you should follow to make validation forward-compat
 """
 
 import re
+from typing import Sequence, Dict, Callable
 
-from typing import Callable
 from airflow import LoggingMixin, AirflowException
 
 COMPOSITE_FIELD_TYPES = ['union', 'dict', 'list']
@@ -190,13 +189,13 @@ class GcpBodyFieldValidator(LoggingMixin):
     for some examples and explanations of how to create specification.
 
     :param validation_specs: dictionary describing validation specification
-    :type validation_specs: [dict]
+    :type validation_specs: list[dict]
     :param api_version: Version of the api used (for example v1)
     :type api_version: str
 
     """
     def __init__(self, validation_specs, api_version):
-        # type: ([dict], str) -> None
+        # type: (Sequence[Dict], str) -> None
         super(GcpBodyFieldValidator, self).__init__()
         self._validation_specs = validation_specs
         self._api_version = api_version
@@ -310,6 +309,7 @@ class GcpBodyFieldValidator(LoggingMixin):
                         force_optional=False):
         """
         Validates if field is OK.
+
         :param validation_spec: specification of the field
         :type validation_spec: dict
         :param dictionary_to_validate: dictionary where the field should be present
@@ -317,7 +317,7 @@ class GcpBodyFieldValidator(LoggingMixin):
         :param parent: full path of parent field
         :type parent: str
         :param force_optional: forces the field to be optional
-          (all union fields have force_optional set to True)
+            (all union fields have force_optional set to True)
         :type force_optional: bool
         :return: True if the field is present
         """
@@ -409,6 +409,7 @@ class GcpBodyFieldValidator(LoggingMixin):
         instantiated with. Raises ValidationSpecificationException or
         ValidationFieldException in case of problems with specification or the
         body not conforming to the specification respectively.
+
         :param body_to_validate: body that must follow the specification
         :type body_to_validate: dict
         :return: None

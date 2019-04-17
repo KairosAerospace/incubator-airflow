@@ -98,6 +98,8 @@ arrays - the sanitizer iterates through all dictionaries in the array and search
 components in all elements of the array.
 """
 
+from typing import List
+
 from airflow import LoggingMixin, AirflowException
 
 
@@ -114,11 +116,11 @@ class GcpBodyFieldSanitizer(LoggingMixin):
     """Sanitizes the body according to specification.
 
     :param sanitize_specs: array of strings that specifies which fields to remove
-    :type sanitize_specs: [string]
+    :type sanitize_specs: list[str]
 
     """
     def __init__(self, sanitize_specs):
-        # type: ([str]) -> None
+        # type: (List[str]) -> None
         super(GcpBodyFieldSanitizer, self).__init__()
         self._sanitize_specs = sanitize_specs
 
