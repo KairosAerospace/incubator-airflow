@@ -18,4 +18,4 @@
 # under the License.
 #
 
-version = '1.10.3.prefect'
+version = '1.10.3+prefect.0'
