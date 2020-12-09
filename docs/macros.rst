@@ -48,9 +48,9 @@ Variable                            Description
 ``{{ ts }}``                        same as ``execution_date.isoformat()``. Example: ``2018-01-01T00:00:00+00:00``
 ``{{ ts_nodash }}``                 same as ``ts`` without ``-``, ``:`` and TimeZone info. Example: ``20180101T000000``
 ``{{ ts_nodash_with_tz }}``         same as ``ts`` without ``-`` and ``:``. Example: ``20180101T000000+0000``
-``{{ execution_date }}``            the execution_date (pendulum.Pendulum)
-``{{ prev_execution_date }}``       the previous execution date (if available) (pendulum.Pendulum)
-``{{ next_execution_date }}``       the next execution date (pendulum.Pendulum)
+``{{ execution_date }}``            the execution_date (pendulum.DateTime)
+``{{ prev_execution_date }}``       the previous execution date (if available) (pendulum.DateTime)
+``{{ next_execution_date }}``       the next execution date (pendulum.DateTime)
 ``{{ dag }}``                       the DAG object
 ``{{ task }}``                      the Task object
 ``{{ macros }}``                    a reference to the macros package, described below
