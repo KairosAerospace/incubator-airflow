@@ -277,7 +277,7 @@ else:
 def do_setup():
     write_version()
     setup(
-        name='kairflow3',
+        name='kairflow4',
         description='Programmatically author, schedule and monitor data pipelines',
         long_description=long_description,
         long_description_content_type='text/markdown',
@@ -311,7 +311,7 @@ def do_setup():
             'lxml>=4.0.0',
             'markdown>=2.5.2, <3.0',
             'pandas>=0.17.1, <1.0.0',
-            'pendulum==1.4.4',
+            'pendulum>=1.4.4, <=2.1.2',
             'psutil>=4.2.0, <6.0.0',
             'pygments>=2.0.1, <3.0',
             'python-daemon>=2.1.1, <2.2',
