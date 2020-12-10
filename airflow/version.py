@@ -18,4 +18,4 @@
 # under the License.
 #
 
-version = '1.10.3.1+prefect.0'
+version = '1.10.3+kairos.prefect.0'
