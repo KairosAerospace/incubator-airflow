@@ -633,7 +633,7 @@ INSTALL_REQUIREMENTS = [
     'marshmallow-sqlalchemy>=0.16.1, <0.19.0;python_version<"3.6"',
     'packaging',
     'pandas>=0.17.1, <2.0',
-    'pendulum==1.4.4',
+    'pendulum>=2.0.0, <=2.1.2',  # Updated for prefect since not backward compatible
     'pep562~=1.0;python_version<"3.7"',
     'psutil>=4.2.0, <6.0.0',
     'pygments>=2.0.1, <3.0',
@@ -648,7 +648,7 @@ INSTALL_REQUIREMENTS = [
     'sqlalchemy_jsonfield==0.8.0;python_version<"3.5"',
     'sqlalchemy_jsonfield~=0.9;python_version>="3.5"',
     'tabulate>=0.7.5, <0.9',
-    'tenacity==4.12.0',
+    'tenacity>=4.12.0',  # Needed for kode to bump up tenacity
     'thrift>=0.11.0',
     'typing;python_version<"3.5"',
     'typing-extensions>=3.7.4;python_version<"3.8"',

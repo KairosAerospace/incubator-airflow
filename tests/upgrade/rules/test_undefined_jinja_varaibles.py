@@ -170,7 +170,7 @@ class TestUndefinedJinjaVariablesRule(TestCase):
             "dict object['undefined_variable']",
             "Possible UndefinedJinjaVariable -> DAG: test-undefined-jinja-variables, "
             "Task: templated_string, Attribute: bash_command, Error: no such element: "
-            "pendulum.pendulum.Pendulum object['invalid_element']",
+            "pendulum.pendulum.DateTime object['invalid_element']",
             "Possible UndefinedJinjaVariable -> DAG: test-undefined-jinja-variables, "
             "Task: templated_string, Attribute: bash_command, Error: foo",
             "Possible UndefinedJinjaVariable -> DAG: test-undefined-jinja-variables, "
