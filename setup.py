@@ -622,7 +622,7 @@ INSTALL_REQUIREMENTS = [
     'graphviz>=0.12',
     'gunicorn>=19.5.0, <21.0',
     'importlib-metadata~=2.0; python_version<"3.8"',
-    'importlib_resources~=1.4',
+    'importlib_resources~=4.1',
     'iso8601>=0.1.12',
     'jinja2>=2.10.1, <2.12.0',
     'json-merge-patch==0.2',
